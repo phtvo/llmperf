@@ -1,4 +1,5 @@
 import argparse
+from collections import defaultdict
 from collections.abc import Iterable
 import json
 import os
@@ -78,6 +79,7 @@ def get_token_throughput_latencies(
         num_output_tokens = (sample_random_positive_int(
             mean_output_tokens, stddev_output_tokens
         ))
+        print(num_output_tokens)
         num_output_tokens_list.append(num_output_tokens)
 
         prompts.append(randomly_sample_sonnet_lines_prompt(
@@ -216,17 +218,17 @@ def metrics_summary(
         quantiles_reformatted_keys = {}
         for quantile, value in quantiles.items():
             reformatted_key = f"p{int(quantile * 100)}"
-            print(f"    {reformatted_key} = {value}")
+            #print(f"    {reformatted_key} = {value}")
             quantiles_reformatted_keys[reformatted_key] = value
         ret[key]["quantiles"] = quantiles_reformatted_keys
         mean = series.mean()
         print(f"    mean = {mean}")
         ret[key]["mean"] = mean
-        print(f"    min = {series.min()}")
+        #print(f"    min = {series.min()}")
         ret[key]["min"] = series.min()
-        print(f"    max = {series.max()}")
+        #print(f"    max = {series.max()}")
         ret[key]["max"] = series.max()
-        print(f"    stddev = {series.std()}")
+        #print(f"    stddev = {series.std()}")
         ret[key]["stddev"] = series.std()
 
     ret[common_metrics.NUM_REQ_STARTED] = len(metrics)
@@ -259,7 +261,7 @@ def metrics_summary(
 
     ret[common_metrics.NUM_COMPLETED_REQUESTS] = num_completed_requests
     ret[common_metrics.COMPLETED_REQUESTS_PER_MIN] = num_completed_requests_per_min
-    
+
     return ret
 
 
@@ -312,7 +314,20 @@ def run_token_benchmark(
         num_concurrent_requests=num_concurrent_requests,
         additional_sampling_params=json.loads(additional_sampling_params),
     )
-
+    df = defaultdict(lambda : [])
+    for metric, res in summary["results"].items():
+        if isinstance(res, dict):
+            df["metrics"].append(metric)
+            for k, v in res.items():
+                if k == "quantiles":
+                    for kk, vv in v.items():
+                        df[kk].append(round(vv, 3))
+                else:
+                    df[k].append(round(v, 3))
+    
+    import pandas as pd
+    df = pd.DataFrame(df)
+    print(df)
     if results_dir:
         filename = f"{model}_{mean_input_tokens}_{mean_output_tokens}"
         filename = re.sub(r"[^\w\d-]+", "-", filename)

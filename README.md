@@ -40,17 +40,17 @@ To run the most basic load test you can the token_benchmark_ray script.
 ### OpenAI Compatible APIs
 ```bash
 export OPENAI_API_KEY=secret_abcdefg
-export OPENAI_API_BASE="https://api.endpoints.anyscale.com/v1"
+export OPENAI_API_BASE="http://localhost:23333/v1"
 
 python token_benchmark_ray.py \
---model "meta-llama/Llama-2-7b-chat-hf" \
+--model "Qwen/Qwen2.5-7B-Instruct" \
 --mean-input-tokens 550 \
---stddev-input-tokens 150 \
---mean-output-tokens 150 \
---stddev-output-tokens 10 \
---max-num-completed-requests 2 \
+--stddev-input-tokens 350 \
+--mean-output-tokens 1000 \
+--stddev-output-tokens 200 \
+--max-num-completed-requests 20 \
 --timeout 600 \
---num-concurrent-requests 1 \
+--num-concurrent-requests 10 \
 --results-dir "result_outputs" \
 --llm-api openai \
 --additional-sampling-params '{}'
