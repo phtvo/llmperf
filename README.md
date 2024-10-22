@@ -44,16 +44,29 @@ export OPENAI_API_BASE="http://localhost:23333/v1"
 
 python token_benchmark_ray.py \
 --model "Qwen/Qwen2.5-7B-Instruct" \
---mean-input-tokens 550 \
---stddev-input-tokens 350 \
+--mean-input-tokens 1000 \
+--stddev-input-tokens 0 \
 --mean-output-tokens 1000 \
---stddev-output-tokens 200 \
---max-num-completed-requests 20 \
+--stddev-output-tokens 0 \
+--max-num-completed-requests 10 \
 --timeout 600 \
 --num-concurrent-requests 10 \
---results-dir "result_outputs" \
+--results-dir "tmp/results/" \
 --llm-api openai \
---additional-sampling-params '{}'
+--additional-sampling-params '{}' --run-id lmdeploy-turbo
+
+python token_benchmark_ray.py \
+--model "Qwen/Qwen2-VL-7B-Instruct" \
+--mean-input-tokens 1000 \
+--stddev-input-tokens 0 \
+--mean-output-tokens 1000 \
+--stddev-output-tokens 0 \
+--max-num-completed-requests 10 \
+--timeout 600 \
+--num-concurrent-requests 1 \
+--results-dir "tmp/results/" \
+--llm-api openai \
+--additional-sampling-params '{}' --image-size 512 --run-id lmdeploy-turbo
 
 ```
 

@@ -12,6 +12,7 @@ class RequestConfig(BaseModel):
             For more information see the Router app's documentation for the completions
         llm_api: The name of the LLM API to send the request to.
         metadata: Additional metadata to attach to the request for logging or validation purposes.
+        image (str): base64 image for vlm.
     """
 
     model: str
@@ -19,3 +20,4 @@ class RequestConfig(BaseModel):
     sampling_params: Optional[Dict[str, Any]] = None
     llm_api: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    image: Optional[str] = None

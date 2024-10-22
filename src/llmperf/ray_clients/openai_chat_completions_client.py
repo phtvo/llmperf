@@ -18,11 +18,25 @@ class OpenAIChatCompletionsClient(LLMClient):
     def llm_request(self, request_config: RequestConfig) -> Dict[str, Any]:
         prompt = request_config.prompt
         prompt, prompt_len = prompt
-
-        message = [
-            {"role": "system", "content": ""},
-            {"role": "user", "content": prompt},
-        ]
+        image = request_config.image
+        if not image:
+            message = [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": prompt},
+            ]
+        else:
+            message = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": image
+                    },
+                },
+            ],
+        }]
         model = request_config.model
         body = {
             "model": model,

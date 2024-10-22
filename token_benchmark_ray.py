@@ -1,6 +1,8 @@
 import argparse
+import base64
 from collections import defaultdict
 from collections.abc import Iterable
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +12,7 @@ import random
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+from PIL import Image
 import ray
 
 from llmperf import common_metrics
@@ -26,6 +29,15 @@ from tqdm import tqdm
 
 from transformers import LlamaTokenizerFast
 
+ROOT = os.path.dirname(__file__)
+IMAGE_PATHS = [os.path.join(ROOT, "src/llmperf/images", each) for each in os.listdir(os.path.join(ROOT, "src/llmperf/images"))]
+
+def image_to_base64(pil_image):
+    buffered = io.BytesIO()
+    pil_image.save(buffered, format="JPEG")
+    return "data:image/jpeg;base64," + base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+
 def get_token_throughput_latencies(
     model: str,
     mean_input_tokens: int,
@@ -37,6 +49,7 @@ def get_token_throughput_latencies(
     max_num_completed_requests: int = 500,
     test_timeout_s=90,
     llm_api="openai",
+    image_size:int = None, 
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """Get the token throughput and latencies for the given model.
 
@@ -75,11 +88,12 @@ def get_token_throughput_latencies(
     # make up prompts outside of send loop for faster benchmarking loop
     num_output_tokens_list = []
     prompts = []
+    images = []
+    
     for i in range(max_num_completed_requests):
         num_output_tokens = (sample_random_positive_int(
             mean_output_tokens, stddev_output_tokens
         ))
-        print(num_output_tokens)
         num_output_tokens_list.append(num_output_tokens)
 
         prompts.append(randomly_sample_sonnet_lines_prompt(
@@ -88,6 +102,15 @@ def get_token_throughput_latencies(
             expect_output_tokens=num_output_tokens,
             tokenizer=tokenizer
         ))
+        if image_size:
+            assert isinstance(image_size, int)
+            random_img_path = random.choice(IMAGE_PATHS)
+            img = Image.open(random_img_path)
+            img = img.resize((image_size, image_size))
+            images.append(image_to_base64(img))
+        else:
+            images.append(None)
+            
     start_time = time.monotonic()
     iter = 0
     pbar = tqdm(total=max_num_completed_requests)
@@ -102,6 +125,7 @@ def get_token_throughput_latencies(
         request_config = RequestConfig(
             model=model,
             prompt=prompts.pop(),
+            image=images.pop(),
             sampling_params=default_sampling_params,
             llm_api=llm_api,
         )
@@ -269,6 +293,7 @@ def run_token_benchmark(
     llm_api: str,
     model: str,
     test_timeout_s: int,
+    run_id:str,
     max_num_completed_requests: int,
     num_concurrent_requests: int,
     mean_input_tokens: int,
@@ -278,6 +303,7 @@ def run_token_benchmark(
     additional_sampling_params: str,
     results_dir: str,
     user_metadata: Dict[str, Any],
+    image_size: int = None,
 ):
     """
     Args:
@@ -313,6 +339,7 @@ def run_token_benchmark(
         stddev_output_tokens=stddev_output_tokens,
         num_concurrent_requests=num_concurrent_requests,
         additional_sampling_params=json.loads(additional_sampling_params),
+        image_size=image_size
     )
     df = defaultdict(lambda : [])
     for metric, res in summary["results"].items():
@@ -329,11 +356,12 @@ def run_token_benchmark(
     df = pd.DataFrame(df)
     print(df)
     if results_dir:
-        filename = f"{model}_{mean_input_tokens}_{mean_output_tokens}"
-        filename = re.sub(r"[^\w\d-]+", "-", filename)
-        filename = re.sub(r"-{2,}", "-", filename)
-        summary_filename = f"{filename}_summary"
-        individual_responses_filename = f"{filename}_individual_responses"
+        #out_folder = re.sub(r"[^\w\d-]+", "-", out_folder)
+        #out_folder = re.sub(r"-{2,}", "-", out_folder)
+        
+        os.makedirs(results_dir, exist_ok=True)
+        summary_filename = f"summary"
+        individual_responses_filename = f"responses"
 
         # Update to metadata.
         summary.update(user_metadata)
@@ -346,123 +374,135 @@ def run_token_benchmark(
             raise ValueError(f"{results_dir} is not a directory")
 
         try:
+            df.to_csv(results_dir / f"{summary_filename}.csv")
             with open(results_dir / f"{summary_filename}.json", "w") as f:
-                json.dump(results.to_dict(), f, indent=4, default=str)
+                json.dump(results.to_dict(), f, indent=2, default=str)
         except Exception as e:
             print(results.to_dict())
             raise e
 
         try:
             with open(results_dir / f"{individual_responses_filename}.json", "w") as f:
-                json.dump(individual_responses, f, indent=4)
+                json.dump(individual_responses, f, indent=2)
         except Exception as e:
             print(individual_responses)
             raise e
 
-
-args = argparse.ArgumentParser(
-    description="Run a token throughput and latency benchmark."
-)
-
-args.add_argument(
-    "--model", type=str, required=True, help="The model to use for this load test."
-)
-args.add_argument(
-    "--mean-input-tokens",
-    type=int,
-    default=550,
-    help=(
-        "The mean number of tokens to send in the prompt for the request. "
-        " (default: %(default)s)"
-    ),
-)
-args.add_argument(
-    "--stddev-input-tokens",
-    type=int,
-    default=150,
-    help=(
-        "The standard deviation of number of tokens to send in the prompt for the request. "
-        "(default: %(default)s)"
-    ),
-)
-args.add_argument(
-    "--mean-output-tokens",
-    type=int,
-    default=150,
-    help=(
-        "The mean number of tokens to generate from each llm request. This is the max_tokens param "
-        "for the completions API. Note that this is not always the number of tokens returned. "
-        "(default: %(default)s)"
-    ),
-)
-args.add_argument(
-    "--stddev-output-tokens",
-    type=int,
-    default=80,
-    help=(
-        "The stdandard deviation on the number of tokens to generate per llm request. "
-        "(default: %(default)s)"
-    ),
-)
-args.add_argument(
-    "--num-concurrent-requests",
-    type=int,
-    default=10,
-    help=("The number of concurrent requests to send (default: %(default)s)"),
-)
-args.add_argument(
-    "--timeout",
-    type=int,
-    default=90,
-    help="The amount of time to run the load test for. (default: %(default)s)",
-)
-args.add_argument(
-    "--max-num-completed-requests",
-    type=int,
-    default=10,
-    help=(
-        "The number of requests to complete before finishing the test. Note "
-        "that its possible for the test to timeout first. (default: %(default)s)"
-    ),
-)
-args.add_argument(
-    "--additional-sampling-params",
-    type=str,
-    default="{}",
-    help=(
-        "Additional sampling params to send with the each request to the LLM API. "
-        "(default: %(default)s) No additional sampling params are sent."
-    ),
-)
-args.add_argument(
-    "--results-dir",
-    type=str,
-    default="",
-    help=(
-        "The directory to save the results to. "
-        "(`default: %(default)s`) No results are saved)"
-    ),
-)
-args.add_argument(
-    "--llm-api",
-    type=str,
-    default="openai",
-    help=(
-        f"The name of the llm api to use. Can select from {SUPPORTED_APIS}"
-        " (default: %(default)s)"
-    ),
-)
-args.add_argument(
-    "--metadata",
-    type=str,
-    default="",
-    help=(
-        "A comma separated list of metadata to include in the results, e.g. "
-        "name=foo,bar=1. These will be added to the metadata field of the results. "
-    ),
-)
-
 if __name__ == "__main__":
+    args = argparse.ArgumentParser(
+        description="Run a token throughput and latency benchmark."
+    )
+
+    args.add_argument(
+        "--model", type=str, required=True, help="The model to use for this load test."
+    )
+
+    args.add_argument(
+        "--run-id", type=str, required=True, help="Run ID to save result."
+    )
+    args.add_argument(
+        "--mean-input-tokens",
+        type=int,
+        default=550,
+        help=(
+            "The mean number of tokens to send in the prompt for the request. "
+            " (default: %(default)s)"
+        ),
+    )
+    args.add_argument(
+        "--stddev-input-tokens",
+        type=int,
+        default=150,
+        help=(
+            "The standard deviation of number of tokens to send in the prompt for the request. "
+            "(default: %(default)s)"
+        ),
+    )
+    args.add_argument(
+        "--mean-output-tokens",
+        type=int,
+        default=150,
+        help=(
+            "The mean number of tokens to generate from each llm request. This is the max_tokens param "
+            "for the completions API. Note that this is not always the number of tokens returned. "
+            "(default: %(default)s)"
+        ),
+    )
+    args.add_argument(
+        "--stddev-output-tokens",
+        type=int,
+        default=80,
+        help=(
+            "The stdandard deviation on the number of tokens to generate per llm request. "
+            "(default: %(default)s)"
+        ),
+    )
+    args.add_argument(
+        "--num-concurrent-requests",
+        type=int,
+        default=10,
+        help=("The number of concurrent requests to send (default: %(default)s)"),
+    )
+    args.add_argument(
+        "--timeout",
+        type=int,
+        default=90,
+        help="The amount of time to run the load test for. (default: %(default)s)",
+    )
+    args.add_argument(
+        "--max-num-completed-requests",
+        type=int,
+        default=10,
+        help=(
+            "The number of requests to complete before finishing the test. Note "
+            "that its possible for the test to timeout first. (default: %(default)s)"
+        ),
+    )
+    args.add_argument(
+        "--additional-sampling-params",
+        type=str,
+        default="{}",
+        help=(
+            "Additional sampling params to send with the each request to the LLM API. "
+            "(default: %(default)s) No additional sampling params are sent."
+        ),
+    )
+    args.add_argument(
+        "--results-dir",
+        type=str,
+        default="",
+        help=(
+            "The directory to save the results to. "
+            "(`default: %(default)s`) No results are saved)"
+        ),
+    )
+    args.add_argument(
+        "--llm-api",
+        type=str,
+        default="openai",
+        help=(
+            f"The name of the llm api to use. Can select from {SUPPORTED_APIS}"
+            " (default: %(default)s)"
+        ),
+    )
+    args.add_argument(
+        "--metadata",
+        type=str,
+        default="",
+        help=(
+            "A comma separated list of metadata to include in the results, e.g. "
+            "name=foo,bar=1. These will be added to the metadata field of the results. "
+        ),
+    )
+    args.add_argument(
+        "--image-size",
+        type=int,
+        default=None,
+        help=(
+            "HxW for image for vlm"
+        ),
+    )
+
     env_vars = dict(os.environ)
     ray.init(runtime_env={"env_vars": env_vars})
     args = args.parse_args()
@@ -474,9 +514,15 @@ if __name__ == "__main__":
             key, value = item.split("=")
             user_metadata[key] = value
 
+    from aim import Run
+    experiment=f"{args.model}/{args.run_id}/i{args.mean_input_tokens}_o{args.mean_output_tokens}_c{args.num_concurrent_requests}_im{args.image_size}"
+
+    run = Run(experiment=experiment)
+    
     run_token_benchmark(
         llm_api=args.llm_api,
         model=args.model,
+        run_id=args.run_id,
         test_timeout_s=args.timeout,
         max_num_completed_requests=args.max_num_completed_requests,
         mean_input_tokens=args.mean_input_tokens,
@@ -487,4 +533,5 @@ if __name__ == "__main__":
         additional_sampling_params=args.additional_sampling_params,
         results_dir=args.results_dir,
         user_metadata=user_metadata,
+        image_size=args.image_size
     )
